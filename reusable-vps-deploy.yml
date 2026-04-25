@@ -1,0 +1,114 @@
+name: Reusable .NET Deploy
+
+on:
+  workflow_call:
+    inputs:
+      branch: { required: true, type: string }
+      dotnet_version: { required: false, type: string, default: "8.0.x" }
+      project_path: { required: true, type: string }
+      path_filters: { required: false, type: string, default: "." }
+      server_username: { required: true, type: string }
+      server_host: { required: true, type: string }
+      server_port: { required: true, type: string }
+      server_known_hosts: { required: true, type: string }
+      deploy_root: { required: true, type: string }
+      link_shared_dir: { required: false, type: boolean, default: false }
+      shared_dir_source: { required: false, type: string, default: "shared/uploaded" }
+      shared_dir_target: { required: false, type: string, default: "wwwroot/uploaded" }
+    secrets:
+      ssh_private_key: { required: true }
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 0
+
+      - name: Check for changes
+        id: check-changes
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            if git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep -E '^(${{ inputs.path_filters }})/'; then
+              echo "changes=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "changes=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup .NET
+        if: steps.check-changes.outputs.changes == 'true'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+
+      - name: Cache NuGet
+        if: steps.check-changes.outputs.changes == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-dotnet-${{ hashFiles('**/*.csproj', '**/*.sln') }}
+          restore-keys: ${{ runner.os }}-dotnet-
+
+      - name: Test
+        if: steps.check-changes.outputs.changes == 'true'
+        run: dotnet test -c Release --verbosity normal
+
+      - name: Publish
+        if: steps.check-changes.outputs.changes == 'true'
+        run: dotnet publish ${{ inputs.project_path }} -c Release -o ./artifacts/publish
+
+      - name: Prepare SSH
+        if: steps.check-changes.outputs.changes == 'true'
+        run: |
+          install -m 700 -d ~/.ssh
+
+          echo "${{ secrets.ssh_private_key }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+          echo "${{ inputs.server_known_hosts }}" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+      - name: Deploy
+        if: steps.check-changes.outputs.changes == 'true'
+        env:
+          RELEASE_ID: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          
+          release_dir="${{ inputs.deploy_root }}/releases/$RELEASE_ID"
+          if [[ "${{ inputs.shared_dir_source }}" == /* ]]; then
+            source_path="${{ inputs.shared_dir_source }}"
+          else
+            source_path="${{ inputs.deploy_root }}/${{ inputs.shared_dir_source }}"
+          fi
+
+          ssh -p "${{ inputs.server_port }}" "${{ inputs.server_username }}@${{ inputs.server_host }}" \
+            "mkdir -p '$release_dir' && if [ '${{ inputs.link_shared_dir }}' = 'true' ]; then mkdir -p '$source_path'; fi"
+
+          scp -C -P "${{ inputs.server_port }}" -r ./artifacts/publish/. "${{ inputs.server_username }}@${{ inputs.server_host }}:$release_dir/"
+
+          ssh -p "${{ inputs.server_port }}" "${{ inputs.server_username }}@${{ inputs.server_host }}" "
+            set -euo pipefail
+            
+            if [ \"${{ inputs.link_shared_dir }}\" = \"true\" ]; then
+              target_path=\"$release_dir/${{ inputs.shared_dir_target }}\"
+              rm -rf \"\$target_path\"
+              mkdir -p \"\$(dirname \"\$target_path\")\"
+              ln -sfn '$source_path' \"\$target_path\"
+            fi
+
+            ln -sfn '$release_dir' '${{ inputs.deploy_root }}/current.new'
+            mv -Tf '${{ inputs.deploy_root }}/current.new' '${{ inputs.deploy_root }}/current'
+
+            DLL_NAME=\"$(basename ${{ inputs.project_path }}).dll\"
+            pkill -INT -u '${{ inputs.server_username }}' -f \"\$DLL_NAME\" || true
+
+            current_target=\$(readlink -f '${{ inputs.deploy_root }}/current')
+            find '${{ inputs.deploy_root }}/releases' -maxdepth 1 -mindepth 1 -not -path \"\$current_target\" -exec rm -rf {} +
+          "

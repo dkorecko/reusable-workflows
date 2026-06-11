@@ -106,7 +106,9 @@ jobs:
             ln -sfn '$release_dir' '${{ inputs.deploy_root }}/current.new'
             mv -Tf '${{ inputs.deploy_root }}/current.new' '${{ inputs.deploy_root }}/current'
 
-            DLL_NAME=\"$(basename ${{ inputs.project_path }}).dll\"
+            project_name=\$(basename '${{ inputs.project_path }}')
+            project_name=\${project_name%.csproj}
+            DLL_NAME=\"\${project_name}.dll\"
             pkill -INT -u '${{ inputs.server_username }}' -f \"\$DLL_NAME\" || true
 
             current_target=\$(readlink -f '${{ inputs.deploy_root }}/current')

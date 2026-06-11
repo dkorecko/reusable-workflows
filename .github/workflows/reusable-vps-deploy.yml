@@ -6,6 +6,7 @@ on:
       branch: { required: true, type: string }
       dotnet_version: { required: false, type: string, default: "8.0.x" }
       project_path: { required: true, type: string }
+      process_name: { required: true, type: string }
       path_filters: { required: false, type: string, default: "." }
       server_username: { required: true, type: string }
       server_host: { required: true, type: string }
@@ -106,8 +107,7 @@ jobs:
             ln -sfn '$release_dir' '${{ inputs.deploy_root }}/current.new'
             mv -Tf '${{ inputs.deploy_root }}/current.new' '${{ inputs.deploy_root }}/current'
 
-            DLL_NAME=\"$(basename ${{ inputs.project_path }}).dll\"
-            pkill -INT -u '${{ inputs.server_username }}' -f \"\$DLL_NAME\" || true
+            pkill -INT -u '${{ inputs.server_username }}' -f '${{ inputs.process_name }}' || true
 
             current_target=\$(readlink -f '${{ inputs.deploy_root }}/current')
             find '${{ inputs.deploy_root }}/releases' -maxdepth 1 -mindepth 1 -not -path \"\$current_target\" -exec rm -rf {} +

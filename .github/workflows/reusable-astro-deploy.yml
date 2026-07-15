@@ -1,0 +1,77 @@
+name: Reusable Astro Deploy
+
+on:
+  workflow_call:
+    inputs:
+      branch: { required: true, type: string }
+      node_version: { required: false, type: string, default: "20" }
+      project_path: { required: false, type: string, default: "." }
+      build_output_path: { required: false, type: string, default: "dist" }
+      server_username: { required: true, type: string }
+      server_host: { required: true, type: string }
+      server_port: { required: true, type: string }
+      server_known_hosts: { required: true, type: string }
+      deploy_root: { required: true, type: string }
+    secrets:
+      ssh_private_key: { required: true }
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.branch }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.project_path }}/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.project_path }}
+        run: npm ci
+
+      - name: Build site
+        working-directory: ${{ inputs.project_path }}
+        run: npm run build
+
+      - name: Prepare SSH
+        run: |
+          install -m 700 -d ~/.ssh
+
+          printf '%s\n' "${{ secrets.ssh_private_key }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+          printf '%s\n' "${{ inputs.server_known_hosts }}" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          RELEASE_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+
+          artifact_dir="${{ inputs.project_path }}/${{ inputs.build_output_path }}"
+          release_dir="${{ inputs.deploy_root }}/releases/$RELEASE_ID"
+
+          test -d "$artifact_dir"
+
+          ssh -p "${{ inputs.server_port }}" "${{ inputs.server_username }}@${{ inputs.server_host }}" \
+            "mkdir -p '$release_dir'"
+
+          scp -C -P "${{ inputs.server_port }}" -r "$artifact_dir"/. \
+            "${{ inputs.server_username }}@${{ inputs.server_host }}:$release_dir/"
+
+          ssh -p "${{ inputs.server_port }}" "${{ inputs.server_username }}@${{ inputs.server_host }}" "
+            set -euo pipefail
+
+            ln -sfn '$release_dir' '${{ inputs.deploy_root }}/current.new'
+            mv -Tf '${{ inputs.deploy_root }}/current.new' '${{ inputs.deploy_root }}/current'
+
+            current_target=\$(readlink -f '${{ inputs.deploy_root }}/current')
+            find '${{ inputs.deploy_root }}/releases' -maxdepth 1 -mindepth 1 -not -path \"\$current_target\" -exec rm -rf {} +
+          "

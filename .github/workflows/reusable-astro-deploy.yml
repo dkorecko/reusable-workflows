@@ -7,6 +7,7 @@ on:
       node_version: { required: false, type: string, default: "20" }
       project_path: { required: false, type: string, default: "." }
       build_output_path: { required: false, type: string, default: "dist" }
+      run_tina_build: { required: false, type: boolean, default: false }
       server_username: { required: true, type: string }
       server_host: { required: true, type: string }
       server_port: { required: true, type: string }
@@ -14,6 +15,8 @@ on:
       deploy_root: { required: true, type: string }
     secrets:
       ssh_private_key: { required: true }
+      tina_public_client_id: { required: false }
+      tina_token: { required: false }
 
 jobs:
   deploy:
@@ -34,6 +37,14 @@ jobs:
       - name: Install dependencies
         working-directory: ${{ inputs.project_path }}
         run: npm ci
+
+      - name: Build TinaCMS
+        if: inputs.run_tina_build
+        working-directory: ${{ inputs.project_path }}
+        env:
+          TINA_PUBLIC_CLIENT_ID: ${{ secrets.tina_public_client_id }}
+          TINA_TOKEN: ${{ secrets.tina_token }}
+        run: npx tinacms build
 
       - name: Build site
         working-directory: ${{ inputs.project_path }}

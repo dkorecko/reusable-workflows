@@ -18,6 +18,7 @@ on:
       tina_public_client_id: { required: false }
       tina_token: { required: false }
       nexlo_content_api_key: { required: false }
+      nexlo_public_content_token: { required: false }
 
 jobs:
   deploy:
@@ -51,6 +52,7 @@ jobs:
         working-directory: ${{ inputs.project_path }}
         env:
           NEXLO_CONTENT_API_KEY: ${{ secrets.nexlo_content_api_key }}
+          PUBLIC_NEXLO_CONTENT_TOKEN: ${{ secrets.nexlo_public_content_token }}
         run: npm run build
 
       - name: Prepare SSH

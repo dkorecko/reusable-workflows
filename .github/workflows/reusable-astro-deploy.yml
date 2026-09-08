@@ -70,22 +70,35 @@ jobs:
           set -euo pipefail
 
           artifact_dir="${{ inputs.project_path }}/${{ inputs.build_output_path }}"
-          release_dir="${{ inputs.deploy_root }}/releases/$RELEASE_ID"
+          deploy_root="${{ inputs.deploy_root }}"
+          release_dir="$deploy_root/releases/$RELEASE_ID"
+          remote="${{ inputs.server_username }}@${{ inputs.server_host }}"
+          port="${{ inputs.server_port }}"
 
           test -d "$artifact_dir"
 
-          ssh -p "${{ inputs.server_port }}" "${{ inputs.server_username }}@${{ inputs.server_host }}" \
-            "mkdir -p '$release_dir'"
+          # rsync the build into a fresh release dir, hardlinking every file that is
+          # byte-identical to the currently-live release (--link-dest). A static Astro
+          # build is almost entirely content-addressed assets that don't change between
+          # deploys, so only the handful of files that actually changed get transferred.
+          # --checksum, not mtime, decides identity - the checkout gives every file a
+          # fresh mtime each run, and hashed asset names make size-only unsafe for HTML.
+          current_target=$(ssh -p "$port" "$remote" "readlink -f '$deploy_root/current' 2>/dev/null || true")
+          link_dest=()
+          if [ -n "$current_target" ]; then
+            link_dest=(--link-dest="$current_target")
+          fi
 
-          scp -C -P "${{ inputs.server_port }}" -r "$artifact_dir"/. \
-            "${{ inputs.server_username }}@${{ inputs.server_host }}:$release_dir/"
+          rsync -a --checksum --delete --mkpath --stats -h "${link_dest[@]}" \
+            -e "ssh -p $port" \
+            "$artifact_dir"/ "$remote:$release_dir/"
 
-          ssh -p "${{ inputs.server_port }}" "${{ inputs.server_username }}@${{ inputs.server_host }}" "
+          ssh -p "$port" "$remote" "
             set -euo pipefail
 
-            ln -sfn '$release_dir' '${{ inputs.deploy_root }}/current.new'
-            mv -Tf '${{ inputs.deploy_root }}/current.new' '${{ inputs.deploy_root }}/current'
+            ln -sfn '$release_dir' '$deploy_root/current.new'
+            mv -Tf '$deploy_root/current.new' '$deploy_root/current'
 
-            current_target=\$(readlink -f '${{ inputs.deploy_root }}/current')
-            find '${{ inputs.deploy_root }}/releases' -maxdepth 1 -mindepth 1 -not -path \"\$current_target\" -exec rm -rf {} +
+            current_target=\$(readlink -f '$deploy_root/current')
+            find '$deploy_root/releases' -maxdepth 1 -mindepth 1 -not -path \"\$current_target\" -exec rm -rf {} +
           "
